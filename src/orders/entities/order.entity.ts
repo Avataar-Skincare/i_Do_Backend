@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryColumn } from 'typeorm';
 
 export interface OrderCartItem {
   id: string;
@@ -39,7 +39,7 @@ export class Order {
   @PrimaryColumn()
   id: string; // e.g. "IDO-XXXXXX"
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   date: Date;
 
   @Column({ type: 'jsonb' })
@@ -57,6 +57,13 @@ export class Order {
   @Column({ type: 'varchar' })
   paymentMethod: PaymentMethod;
 
+  /** Null for COD orders — only ever set after a real Razorpay payment is verified (see OrdersService.create). */
+  @Column({ type: 'varchar', nullable: true })
+  razorpayOrderId: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  razorpayPaymentId: string | null;
+
   @Column({ type: 'jsonb' })
   customer: OrderCustomer;
 
@@ -66,7 +73,12 @@ export class Order {
   @Column({ type: 'varchar', default: 'placed' })
   status: OrderStatus;
 
-  /** Nullable until real accounts exist — guest checkout has no user to attach to yet. */
+  /**
+   * Always set on a new order (placing one requires an account — see
+   * OrdersController). Nullable only because of historical guest rows from
+   * before that requirement, and because account deletion nulls it out again.
+   */
+  @Index()
   @Column({ type: 'varchar', nullable: true })
   userId: string | null;
 }

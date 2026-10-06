@@ -6,6 +6,7 @@ import {
   IsIn,
   IsInt,
   IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
   Min,
@@ -100,4 +101,23 @@ export class CreateOrderDto {
   @ValidateNested()
   @Type(() => AddressDto)
   address: AddressDto;
+
+  /**
+   * Required when paymentMethod is 'online', absent for 'cod' — validated in
+   * OrdersService.create (conditional on another field isn't expressible
+   * cleanly with class-validator decorators alone). The signature is the
+   * actual proof; the other two are just so the backend knows which
+   * Razorpay order/payment to check it against.
+   */
+  @IsOptional()
+  @IsString()
+  razorpayOrderId?: string;
+
+  @IsOptional()
+  @IsString()
+  razorpayPaymentId?: string;
+
+  @IsOptional()
+  @IsString()
+  razorpaySignature?: string;
 }
