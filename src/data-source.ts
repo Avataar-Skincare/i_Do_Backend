@@ -5,6 +5,7 @@ import { Consult } from './consults/entities/consult.entity';
 import { User } from './users/entities/user.entity';
 import { PasswordResetToken } from './auth/entities/password-reset-token.entity';
 import { EmailVerificationCode } from './auth/entities/email-verification-code.entity';
+import { PhoneOtp } from './auth/entities/phone-otp.entity';
 import { OrderClaimToken } from './orders/entities/order-claim-token.entity';
 import { NewsletterSubscriber } from './newsletter/entities/newsletter-subscriber.entity';
 
@@ -20,7 +21,16 @@ export default new DataSource({
   username: process.env.DB_USER ?? 'postgres',
   password: process.env.DB_PASSWORD ?? 'postgres',
   database: process.env.DB_NAME ?? 'lume',
-  entities: [Order, Consult, User, PasswordResetToken, EmailVerificationCode, OrderClaimToken, NewsletterSubscriber],
+  entities: [
+    Order,
+    Consult,
+    User,
+    PasswordResetToken,
+    EmailVerificationCode,
+    PhoneOtp,
+    OrderClaimToken,
+    NewsletterSubscriber,
+  ],
   migrations: ['src/migrations/*.ts'],
   synchronize: false,
 });

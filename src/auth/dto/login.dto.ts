@@ -1,10 +1,9 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsEmail, IsString } from 'class-validator';
 
 export class LoginDto {
-  /** Either an email or a 10-digit phone number — AuthService.login checks both columns. */
-  @IsString()
-  @IsNotEmpty()
-  identifier: string;
+  /** Email only — phone accounts log in via /auth/phone/send-otp + /auth/phone/verify-otp instead. */
+  @IsEmail()
+  email: string;
 
   @IsString()
   password: string;

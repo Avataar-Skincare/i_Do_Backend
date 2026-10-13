@@ -7,20 +7,23 @@ import { UsersModule } from '../users/users.module';
 import { OrdersModule } from '../orders/orders.module';
 import { ConsultsModule } from '../consults/consults.module';
 import { MailModule } from '../mail/mail.module';
+import { SmsModule } from '../sms/sms.module';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailVerificationCode } from './entities/email-verification-code.entity';
+import { PhoneOtp } from './entities/phone-otp.entity';
 import { OrderClaimToken } from '../orders/entities/order-claim-token.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PasswordResetToken, EmailVerificationCode, OrderClaimToken]),
+    TypeOrmModule.forFeature([PasswordResetToken, EmailVerificationCode, PhoneOtp, OrderClaimToken]),
     UsersModule,
     OrdersModule,
     ConsultsModule,
     MailModule,
+    SmsModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

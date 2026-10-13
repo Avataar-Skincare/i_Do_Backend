@@ -1,10 +1,9 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class RegisterDto {
-  /** Either an email or a 10-digit phone number — AuthService.register detects which (see isPhone there). */
-  @IsString()
-  @IsNotEmpty()
-  identifier: string;
+  /** Email only — phone signup now goes through /auth/phone/send-otp + /auth/phone/verify-otp instead. */
+  @IsEmail()
+  email: string;
 
   @IsString()
   @MinLength(8, { message: 'password must be at least 8 characters' })

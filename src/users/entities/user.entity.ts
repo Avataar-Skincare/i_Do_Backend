@@ -12,18 +12,20 @@ export class User {
   id: string;
 
   /**
-   * One of email/phone is always set at signup (whichever the customer chose
-   * — see AuthService.register), never both required. Either can log in
-   * (UsersService.findByIdentifier). Whichever one is missing gets backfilled
-   * the first time it shows up on an order or consult booking (both of which
-   * always collect both independently — see OrdersService/ConsultsService),
-   * but is never overwritten once set.
+   * One of email/phone is always set at signup (whichever the customer
+   * chose), never both required. Email accounts log in with a password
+   * (AuthService.login); phone accounts are passwordless — every login is a
+   * fresh OTP (AuthService.verifyPhoneOtp). Whichever one is missing gets
+   * backfilled the first time it shows up on an order or consult booking
+   * (both of which always collect both independently — see
+   * OrdersService/ConsultsService), but is never overwritten once set.
    */
   @Column({ type: 'varchar', length: 255, unique: true, nullable: true })
   email: string | null;
 
-  @Column({ type: 'varchar', length: 255, name: 'password_hash' })
-  passwordHash: string;
+  /** Null for a phone account — phone login is passwordless (OTP every time), so there's nothing to hash. */
+  @Column({ type: 'varchar', length: 255, name: 'password_hash', nullable: true })
+  passwordHash: string | null;
 
   @Column({ type: 'varchar', length: 120, name: 'full_name', nullable: true })
   fullName: string | null;
@@ -37,6 +39,10 @@ export class User {
 
   @Column({ type: 'varchar', length: 10, nullable: true, unique: true })
   phone: string | null;
+
+  /** Null until the phone OTP is confirmed — set the moment a phone account first logs in via OTP. */
+  @Column({ type: 'timestamptz', name: 'phone_verified_at', nullable: true })
+  phoneVerifiedAt: Date | null;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
