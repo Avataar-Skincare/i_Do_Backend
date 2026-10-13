@@ -6,6 +6,8 @@ import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
+import { VerifyPhoneOtpDto } from './dto/verify-phone-otp.dto';
 import { ClaimOrderDto } from './dto/claim-order.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import type { AuthenticatedUser } from './strategies/jwt.strategy';
@@ -22,6 +24,16 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @Post('phone/send-otp')
+  sendPhoneOtp(@Body() dto: SendPhoneOtpDto) {
+    return this.authService.sendPhoneOtp(dto);
+  }
+
+  @Post('phone/verify-otp')
+  verifyPhoneOtp(@Body() dto: VerifyPhoneOtpDto) {
+    return this.authService.verifyPhoneOtp(dto);
   }
 
   @Post('forgot-password')

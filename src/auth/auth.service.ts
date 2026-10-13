@@ -14,26 +14,32 @@ import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
+import { VerifyPhoneOtpDto } from './dto/verify-phone-otp.dto';
 import { ClaimOrderDto } from './dto/claim-order.dto';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailVerificationCode } from './entities/email-verification-code.entity';
+import { PhoneOtp } from './entities/phone-otp.entity';
 import { OrderClaimToken } from '../orders/entities/order-claim-token.entity';
+import { Fast2SmsService } from '../sms/fast2sms.service';
+import { WhatsappService } from '../sms/whatsapp.service';
 import type { User } from '../users/entities/user.entity';
 
 const SALT_ROUNDS = 12;
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 const VERIFICATION_CODE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const PHONE_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 /** Same response whether or not the account is registered — never confirms/denies one exists. */
 const FORGOT_PASSWORD_RESPONSE = { message: "If an account exists for that email, we've sent a reset link." };
-/** A 10-digit input is treated as a phone number — everything else as an email (same convention as login). */
-const PHONE_RE = /^\d{10}$/;
-const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
-export type PublicUser = Pick<User, 'id' | 'email' | 'phone' | 'fullName' | 'role' | 'createdAt' | 'emailVerifiedAt'>;
+export type PublicUser = Pick<
+  User,
+  'id' | 'email' | 'phone' | 'fullName' | 'role' | 'createdAt' | 'emailVerifiedAt' | 'phoneVerifiedAt'
+>;
 
 function toPublicUser(user: User): PublicUser {
-  const { id, email, phone, fullName, role, createdAt, emailVerifiedAt } = user;
-  return { id, email, phone, fullName, role, createdAt, emailVerifiedAt };
+  const { id, email, phone, fullName, role, createdAt, emailVerifiedAt, phoneVerifiedAt } = user;
+  return { id, email, phone, fullName, role, createdAt, emailVerifiedAt, phoneVerifiedAt };
 }
 
 function generateOtp(): string {
@@ -57,56 +63,97 @@ export class AuthService {
     private readonly verificationCodesRepo: Repository<EmailVerificationCode>,
     @InjectRepository(OrderClaimToken)
     private readonly claimTokensRepo: Repository<OrderClaimToken>,
+    @InjectRepository(PhoneOtp)
+    private readonly phoneOtpRepo: Repository<PhoneOtp>,
+    private readonly fast2SmsService: Fast2SmsService,
+    private readonly whatsappService: WhatsappService,
   ) {}
 
   /**
-   * One field, one identifier — the customer picks email OR phone, never
-   * both (a second mandatory field just to sign up is friction nobody asked
-   * for). Signing up with a phone logs in immediately, no verification,
-   * since there's no SMS/WhatsApp OTP provider wired up yet. Signing up with
-   * an email sends a 6-digit code and holds the session until it's verified
-   * (see AuthController.verifyEmail) — unlike phone, email delivery is
-   * already proven (AWS SES), so there's no reason to skip it, and it catches
-   * a typo'd/fake address before order and consult confirmations go nowhere.
+   * Email only — phone signup/login goes through sendPhoneOtp/verifyPhoneOtp
+   * instead (passwordless, same account either way). Sends a 6-digit code
+   * and holds the session until it's verified (see AuthController.verifyEmail)
+   * — catches a typo'd/fake address before order and consult confirmations
+   * go nowhere.
    */
   async register(dto: RegisterDto): Promise<{ user: PublicUser; token: string }> {
-    const isPhone = PHONE_RE.test(dto.identifier);
-    if (!isPhone && !EMAIL_RE.test(dto.identifier)) {
-      throw new BadRequestException('Enter a valid email or a 10-digit phone number');
-    }
-
-    if (isPhone) {
-      if (await this.usersService.findByPhone(dto.identifier)) {
-        throw new ConflictException('An account with this phone number already exists');
-      }
-    } else if (await this.usersService.findByEmail(dto.identifier)) {
+    if (await this.usersService.findByEmail(dto.email)) {
       throw new ConflictException('An account with this email already exists');
     }
 
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
     const user = await this.usersService.create({
-      email: isPhone ? undefined : dto.identifier,
-      phone: isPhone ? dto.identifier : undefined,
+      email: dto.email,
       passwordHash,
       fullName: dto.fullName,
     });
 
-    if (!isPhone) {
-      await this.sendVerificationCode(user).catch((err) =>
-        this.logger.warn(`Signup verification email failed for ${user.email}: ${(err as Error).message}`),
-      );
-    }
+    await this.sendVerificationCode(user).catch((err) =>
+      this.logger.warn(`Signup verification email failed for ${user.email}: ${(err as Error).message}`),
+    );
 
     return { user: toPublicUser(user), token: this.signToken(user) };
   }
 
-  /** `identifier` can be either the account's email or its phone number. */
   async login(dto: LoginDto): Promise<{ user: PublicUser; token: string }> {
-    const user = await this.usersService.findByIdentifier(dto.identifier);
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+    const user = await this.usersService.findByEmail(dto.email);
+    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
 
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
+
+    return { user: toPublicUser(user), token: this.signToken(user) };
+  }
+
+  /** Invalidates any outstanding code for this phone before sending a fresh one — works for both a new and an existing phone. */
+  async sendPhoneOtp(dto: SendPhoneOtpDto): Promise<{ message: string }> {
+    await this.phoneOtpRepo.update({ phone: dto.phone, usedAt: IsNull() }, { usedAt: new Date() });
+
+    const code = generateOtp();
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+
+    await this.phoneOtpRepo.save(
+      this.phoneOtpRepo.create({
+        phone: dto.phone,
+        codeHash,
+        expiresAt: new Date(Date.now() + PHONE_OTP_TTL_MS),
+      }),
+    );
+
+    await this.fast2SmsService.sendOtp(dto.phone, code);
+    await this.whatsappService.sendOtp(dto.phone, code);
+
+    return { message: 'A verification code has been sent to your phone.' };
+  }
+
+  /**
+   * One call does double duty, same as the Client repo's own flow: if this
+   * phone has no account yet, verifying the code creates one (no password —
+   * phone accounts are passwordless, every login is a fresh OTP); if it
+   * already exists, verifying just logs them in.
+   */
+  async verifyPhoneOtp(dto: VerifyPhoneOtpDto): Promise<{ user: PublicUser; token: string }> {
+    const codeHash = crypto.createHash('sha256').update(dto.code).digest('hex');
+    const verification = await this.phoneOtpRepo.findOne({
+      where: { phone: dto.phone, codeHash },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!verification || verification.usedAt || verification.expiresAt < new Date()) {
+      throw new UnauthorizedException('That code is invalid or has expired');
+    }
+
+    verification.usedAt = new Date();
+    await this.phoneOtpRepo.save(verification);
+
+    let user = await this.usersService.findByPhone(dto.phone);
+    if (!user) {
+      user = await this.usersService.create({ phone: dto.phone, fullName: dto.fullName });
+    }
+    if (!user.phoneVerifiedAt) {
+      await this.usersService.markPhoneVerified(user.id);
+      user.phoneVerifiedAt = new Date();
+    }
 
     return { user: toPublicUser(user), token: this.signToken(user) };
   }

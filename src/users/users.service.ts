@@ -18,20 +18,16 @@ export class UsersService {
     return this.usersRepo.findOne({ where: { phone } });
   }
 
-  /** Login accepts either identifier — a 10-digit input is checked as a phone, anything else as an email. */
-  findByIdentifier(identifier: string): Promise<User | null> {
-    return /^\d{10}$/.test(identifier) ? this.findByPhone(identifier) : this.findByEmail(identifier);
-  }
-
   findById(id: string): Promise<User | null> {
     return this.usersRepo.findOne({ where: { id } });
   }
 
-  create(input: { email?: string; phone?: string; passwordHash: string; fullName?: string }): Promise<User> {
+  /** `passwordHash` is omitted for a phone account — phone login is passwordless (OTP every time). */
+  create(input: { email?: string; phone?: string; passwordHash?: string; fullName?: string }): Promise<User> {
     const user = this.usersRepo.create({
       email: input.email ?? null,
       phone: input.phone ?? null,
-      passwordHash: input.passwordHash,
+      passwordHash: input.passwordHash ?? null,
       fullName: input.fullName ?? null,
     });
     return this.usersRepo.save(user);
@@ -47,6 +43,10 @@ export class UsersService {
 
   async markEmailVerified(userId: string): Promise<void> {
     await this.usersRepo.update({ id: userId }, { emailVerifiedAt: new Date() });
+  }
+
+  async markPhoneVerified(userId: string): Promise<void> {
+    await this.usersRepo.update({ id: userId }, { phoneVerifiedAt: new Date() });
   }
 
   /**
