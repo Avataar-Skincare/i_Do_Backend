@@ -1,15 +1,5 @@
 # i_Do_Backend
 
-> ## ⚠️ @Vishal — action needed
-> Code comments here say "see CLAUDE.md" (e.g. `orders.controller.ts`: the 2026-09-30 "orders require
-> an account" decision and "this was a real data leak once"), and `.env.example` refers to a
-> `docker-compose.yml` with an `ido-postgres` container — **neither file was ever committed**. They
-> appear to exist only on your machine. Please:
-> 1. Merge everything from your local `CLAUDE.md` into this file (decisions, gotchas, the data-leak
->    incident, local setup) — keep or correct what's below, don't just append a second copy.
-> 2. Commit your local `docker-compose.yml`.
-> 3. Push, then delete this callout.
-
 Backend for the **i do** e-commerce website (idowellness.ai) — the storefront that sells Avataar's
 smart ring. **"i do" is the rebrand of LUME**: the same ring as `lume-backend` / `lume-mobile`.
 If a comment, ticket or teammate says "Lume", it means this product.
@@ -69,12 +59,25 @@ Two kinds of account (one of email/phone always set, never both required):
   SMS via `src/sms/fast2sms.service.ts` (failures throw — the customer must know); a WhatsApp copy
   via `src/sms/whatsapp.service.ts` is best-effort and never blocks. Both currently reuse
   **Avataar's** DLT sender ID / templates (`AVTSKC`, `185443`, `otp9`) — needs i do's own before launch.
+  Ported from the `Client` repo's own `sendSms`/`sendOtpOnWhatsapp` (DB-backed hashed/expiring codes
+  here instead of Client's Redis — this service has no Redis and didn't need to add one). Two other
+  WhatsApp-adjacent things in Client's real `.env` are **not** usable for this: `WHATSAPP_USERNAME`/
+  `WHATSAPP_PASSWORD` is Basic Auth on an *inbound* webhook, nothing to do with sending; `WHATSAPP_BOT_API`/
+  `WHATSAPP_BOT_TOKEN` (Blozum) is a real credentialed sender but every call site is commented-out dead
+  code — don't port it without confirming a working template `flow` name on Blozum's own dashboard first.
+  Confirmed via a real phone screenshot that the Messenger-gateway mechanism genuinely works in Client's
+  production (a native Meta WhatsApp "Authentication" template, Copy Code button) — its credentials just
+  live in that production server's own env config, not in the local `Client` checkout's `.env`.
 - JWT payload `{ sub, email, role }`, `JWT_EXPIRES_IN` (7d). Frontend stores it in `localStorage`.
 - Password-reset tokens, email OTPs and order-claim tokens are all stored **hashed**, single-use,
   expiring. Keep that pattern for any new token type.
 - Missing email/phone on an account is backfilled from the first order/consult that supplies it —
   never overwritten once set.
 - `DELETE /auth/me` anonymises orders (kept for accounting), hard-deletes consults, then the user.
+- **`claim-order`** (`GET /auth/claim-order/:token`, `POST /auth/claim-order`): lets someone turn a
+  historical guest order (from before 2026-09-30, when guest checkout was removed) into a real
+  account via an emailed link — the link itself is the proof of inbox ownership, same trust model as
+  password reset. Attaches every guest order under that email, not just the one the link was for.
 
 ### Orders & payments (Razorpay)
 1. Frontend computes the total → `POST /orders/razorpay-order { amount }` creates a Razorpay order.
@@ -84,7 +87,11 @@ Two kinds of account (one of email/phone always set, never both required):
 - COD skips 1–3 and adds `SITE.codFeeInPaise` (₹50) on the frontend.
 - **All money is integer paise**, everywhere (DB, DTOs, Razorpay). Never introduce rupee floats.
 - Order id format `IDO-XXXXXX`. Ring list price lives in the *frontend* (`lib/content/site.ts`, ₹14,999).
-- `RazorpayService` builds its client lazily — blank keys must not crash boot.
+- `RazorpayService` builds its client lazily — blank keys must not crash boot (the SDK itself throws
+  synchronously on an empty `key_id`, which would otherwise crash the whole app on startup).
+- Import it as `import Razorpay = require('razorpay')`, not a default import — the package has no
+  `esModuleInterop`-style default export and this project's tsconfig doesn't have that flag on; a
+  default import compiles to a call on a nonexistent `.default`.
 - Placing an order requires an account (decided 2026-09-30). `userId IS NULL` rows are legacy guest
   orders, recoverable via the claim-order email flow.
 - `Order` shape is duplicated in `i_Do_Frontend/lib/orders-storage.ts` — change both together.
@@ -118,6 +125,10 @@ future ring ops dashboard, each with prod + staging, under Docker Compose behind
 Database: new RDS Postgres **`ring-prod`** (PG 18.3) holding two databases, `lume` and
 `ido_website`, with separate logins; existing `lume-test` becomes staging (+ `ido_website_test`).
 Domain `idowellness.ai`. Shared AWS context: `../CLAUDE.md`. AWS access from Claude is read-only.
+**Note:** `../CLAUDE.md` and `../docker-compose.yml` (the root `Lume_website/` folder shared with
+`i_Do_Frontend`) are not actually tracked by git anywhere — that parent folder isn't a repo at all,
+so neither file currently has any backup or history. Needs a decision: move both into one of the two
+app repos, or give the shared root its own small repo.
 
 ## Known gaps (as of 2026-10-14)
 
