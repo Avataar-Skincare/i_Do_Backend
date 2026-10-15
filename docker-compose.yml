@@ -1,0 +1,78 @@
+services:
+  # This website's own database — fully separate from the ring app's Postgres
+  # (no shared instance, no shared `users` table). Own container, own volume,
+  # own credentials.
+  postgres:
+    image: postgres:17
+    container_name: ido-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-ido}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ido_dev_password}
+      POSTGRES_DB: ${DB_NAME:-ido_website}
+    volumes:
+      - ido_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-ido}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # 3001 collides with partner-app-server locally — moved off it.
+      PORT: 3011
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-ido}
+      DB_PASSWORD: ${DB_PASSWORD:-ido_dev_password}
+      DB_NAME: ${DB_NAME:-ido_website}
+      DB_SYNC: ${DB_SYNC:-false}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      PARTNER_APP_API_KEY: ${PARTNER_APP_API_KEY:-}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AWS_SES_ACCESS_KEY_ID: ${AWS_SES_ACCESS_KEY_ID:-}
+      AWS_SES_SECRET_ACCESS_KEY: ${AWS_SES_SECRET_ACCESS_KEY:-}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-support@idowellness.ai}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      FAST2SMS_API_KEY: ${FAST2SMS_API_KEY:-}
+      FAST2SMS_SENDER_ID: ${FAST2SMS_SENDER_ID:-AVTSKC}
+      FAST2SMS_OTP_TEMPLATE_ID: ${FAST2SMS_OTP_TEMPLATE_ID:-185443}
+      MESSENGER_WEBHOOK_URL: ${MESSENGER_WEBHOOK_URL:-}
+      MESSENGER_API_KEY: ${MESSENGER_API_KEY:-}
+      MESSENGER_WORKSPACE_ID: ${MESSENGER_WORKSPACE_ID:-2}
+      MESSENGER_OTP_TEMPLATE: ${MESSENGER_OTP_TEMPLATE:-otp9}
+    ports:
+      - "3011:3011"
+
+  frontend:
+    build:
+      # Requires `../i_Do_Frontend` to exist — clone both repos as sibling
+      # directories (same parent folder, matching names) before running this.
+      context: ../i_Do_Frontend
+      # NEXT_PUBLIC_* vars are baked into the client bundle at build time — this
+      # must be a build arg, not a runtime `environment:` entry (which would be
+      # silently ignored by the already-built image).
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3011}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+
+volumes:
+  ido_postgres_data:
