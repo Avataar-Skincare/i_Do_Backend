@@ -24,6 +24,9 @@ import { ENTITIES } from './entities';
         username: config.get<string>('DB_USER', 'postgres'),
         password: config.get<string>('DB_PASSWORD', 'postgres'),
         database: config.get<string>('DB_NAME', 'lume'),
+        // RDS rejects unencrypted connections. Encrypted but not CA-verified, same as
+        // lume-backend's sslmode=no-verify; verify against the RDS CA bundle before prod.
+        ssl: config.get<string>('DB_SSL', 'false') === 'true' ? { rejectUnauthorized: false } : false,
         // `User` maps to a table this service doesn't own (see its entity
         // comment) — never let synchronize touch it. `Order`/`Consult` are
         // ours, managed by src/migrations/ instead of synchronize either way.
