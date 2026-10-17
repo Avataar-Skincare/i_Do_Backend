@@ -14,7 +14,10 @@ export default new DataSource({
   username: process.env.DB_USER ?? 'postgres',
   password: process.env.DB_PASSWORD ?? 'postgres',
   database: process.env.DB_NAME ?? 'lume',
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   entities: ENTITIES,
-  migrations: ['src/migrations/*.ts'],
+  // __dirname-relative so the same file works under ts-node (src/*.ts) and in the
+  // compiled image (dist/*.js), where src/ doesn't exist.
+  migrations: [__dirname + '/migrations/*{.ts,.js}'],
   synchronize: false,
 });
