@@ -44,6 +44,23 @@ export class User {
   @Column({ type: 'timestamptz', name: 'phone_verified_at', nullable: true })
   phoneVerifiedAt: Date | null;
 
+  /** Soft delete: set on account deletion, after orders are PII-scrubbed. */
+  @Column({ type: 'timestamptz', name: 'deleted_at', nullable: true })
+  deletedAt: Date | null;
+
+  @Column({ type: 'varchar', length: 16, name: 'terms_version', nullable: true })
+  termsVersion: string | null;
+
+  /** DPDP health-data consent (TD-25); every change is also written to the audit log. */
+  @Column({ type: 'timestamptz', name: 'health_consent_at', nullable: true })
+  healthConsentAt: Date | null;
+
+  @Column({ type: 'varchar', length: 16, name: 'health_consent_version', nullable: true })
+  healthConsentVersion: string | null;
+
+  @Column({ type: 'timestamptz', name: 'health_consent_withdrawn_at', nullable: true })
+  healthConsentWithdrawnAt: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
 
