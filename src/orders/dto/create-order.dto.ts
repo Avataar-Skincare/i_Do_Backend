@@ -12,9 +12,12 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import type { OrderCartItem, PaymentMethod } from '../entities/order.entity';
+import type { PaymentMethod } from '../entities/order.entity';
 
-class CartItemDto implements OrderCartItem {
+// TODO(LLD v1.4 §5): legacy cart DTO kept only so OrdersController compiles;
+// replace with {finish, paymentMethod, idempotencyKey, address, gstin?}.
+
+class CartItemDto {
   @IsString()
   @IsNotEmpty()
   id: string;

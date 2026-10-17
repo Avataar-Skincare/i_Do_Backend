@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, NotImplementedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Consult, ConsultStatus } from './entities/consult.entity';
@@ -17,21 +17,10 @@ export class ConsultsService {
     private readonly usersService: UsersService,
   ) {}
 
-  /** A customer can hold any number of sessions per type at once — each is booked, tracked and rescheduled independently. */
-  async create(dto: CreateConsultDto, userId: string): Promise<Consult> {
-    const id = `c_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    const consult = this.consultsRepo.create({ ...dto, id, userId, concern: dto.concern ?? '' });
-    const saved = await this.consultsRepo.save(consult);
-
-    // Opportunistic — only fills in whichever of email/phone the account doesn't already have, never overwrites either.
-    await this.usersService.backfillPhoneIfMissing(userId, dto.phone).catch((err) =>
-      this.logger.warn(`Phone backfill failed for user ${userId}: ${(err as Error).message}`),
-    );
-    await this.usersService.backfillEmailIfMissing(userId, dto.email).catch((err) =>
-      this.logger.warn(`Email backfill failed for user ${userId}: ${(err as Error).message}`),
-    );
-
-    return saved;
+  // TODO(LLD v1.4 §3.5): booking now needs an entitlement (earned at ring
+  // delivery) and an appointment_date; rebuild once entitlements are issued.
+  async create(_dto: CreateConsultDto, _userId: string): Promise<Consult> {
+    throw new NotImplementedException('Consult booking is being rebuilt for LLD v1.4 entitlements');
   }
 
   /** Ownership-checked — a customer can only cancel their own booking. */
@@ -59,8 +48,10 @@ export class ConsultsService {
     if (consult.status === 'CANCELLED') {
       throw new ConflictException(`Consult ${id} was cancelled — book a new session instead of rescheduling this one`);
     }
-    consult.dayLabel = dto.dayLabel;
-    consult.timeSlot = dto.timeSlot;
+    // TODO(LLD v1.4 §3.5): DTO still sends dayLabel; switch to appointmentDate
+    // and reject dates after the entitlement's expires_at.
+    void dto;
+    throw new NotImplementedException('Consult reschedule is being rebuilt for LLD v1.4');
     if (consult.status === 'CONFIRMED') {
       consult.status = 'PENDING';
       consult.doctorName = null;
@@ -88,9 +79,9 @@ export class ConsultsService {
         `Consult ${id} is ${consult.status.toLowerCase()}, not confirmed — nothing to reschedule yet`,
       );
     }
-    consult.dayLabel = dto.dayLabel;
-    consult.timeSlot = dto.timeSlot;
-    return this.consultsRepo.save(consult);
+    // TODO(LLD v1.4 §3.5): DTO still sends dayLabel; switch to appointmentDate.
+    void dto;
+    throw new NotImplementedException('Consult reschedule is being rebuilt for LLD v1.4');
   }
 
   async findMineForUser(userId: string): Promise<Consult[]> {

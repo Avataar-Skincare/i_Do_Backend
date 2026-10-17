@@ -16,11 +16,9 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { VerifyPhoneOtpDto } from './dto/verify-phone-otp.dto';
-import { ClaimOrderDto } from './dto/claim-order.dto';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailVerificationCode } from './entities/email-verification-code.entity';
 import { PhoneOtp } from './entities/phone-otp.entity';
-import { OrderClaimToken } from '../orders/entities/order-claim-token.entity';
 import { Fast2SmsService } from '../sms/fast2sms.service';
 import { WhatsappService } from '../sms/whatsapp.service';
 import type { User } from '../users/entities/user.entity';
@@ -61,8 +59,6 @@ export class AuthService {
     private readonly resetTokensRepo: Repository<PasswordResetToken>,
     @InjectRepository(EmailVerificationCode)
     private readonly verificationCodesRepo: Repository<EmailVerificationCode>,
-    @InjectRepository(OrderClaimToken)
-    private readonly claimTokensRepo: Repository<OrderClaimToken>,
     @InjectRepository(PhoneOtp)
     private readonly phoneOtpRepo: Repository<PhoneOtp>,
     private readonly fast2SmsService: Fast2SmsService,
@@ -232,56 +228,6 @@ export class AuthService {
     return { message: 'Your password has been reset — you can now log in.' };
   }
 
-  /** Read-only — lets the frontend show "set a password" vs "log in" before the customer commits to anything. */
-  async getOrderClaimInfo(rawToken: string): Promise<{ orderId: string; email: string; hasAccount: boolean }> {
-    const claim = await this.findValidClaim(rawToken);
-    const existing = await this.usersService.findByEmail(claim.email);
-    return { orderId: claim.orderId, email: claim.email, hasAccount: !!existing };
-  }
-
-  /**
-   * The link itself is the proof of inbox ownership (same trust model as
-   * password reset) — no separate OTP needed. Creates the account if this
-   * email has none yet (password required), otherwise just attaches to the
-   * existing one and logs them in. Either way, every guest order under this
-   * email gets attached, not just the one the link was sent for.
-   */
-  async claimOrder(dto: ClaimOrderDto): Promise<{ user: PublicUser; token: string }> {
-    const claim = await this.findValidClaim(dto.token);
-
-    let user = await this.usersService.findByEmail(claim.email);
-    if (!user) {
-      if (!dto.password) {
-        throw new BadRequestException('Choose a password to create your account');
-      }
-      const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
-      user = await this.usersService.create({ email: claim.email, passwordHash, fullName: dto.fullName });
-    }
-
-    if (!user.emailVerifiedAt) {
-      await this.usersService.markEmailVerified(user.id);
-      user.emailVerifiedAt = new Date();
-    }
-
-    await this.ordersService.attachAllGuestOrdersForEmail(user.id, claim.email);
-
-    claim.usedAt = new Date();
-    await this.claimTokensRepo.save(claim);
-
-    return { user: toPublicUser(user), token: this.signToken(user) };
-  }
-
-  private async findValidClaim(rawToken: string): Promise<OrderClaimToken> {
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const claim = await this.claimTokensRepo.findOne({ where: { tokenHash } });
-
-    if (!claim || claim.usedAt || claim.expiresAt < new Date()) {
-      throw new UnauthorizedException('This link is invalid or has expired');
-    }
-
-    return claim;
-  }
-
   /** Checked against the code's hash, never the raw value — same defense-in-depth as password reset tokens. */
   async verifyEmail(userId: string, dto: VerifyEmailDto): Promise<{ message: string }> {
     const user = await this.usersService.findById(userId);
@@ -302,7 +248,6 @@ export class AuthService {
     verification.usedAt = new Date();
     await this.verificationCodesRepo.save(verification);
     await this.usersService.markEmailVerified(userId);
-    await this.ordersService.attachAllGuestOrdersForEmail(userId, user.email);
 
     return { message: 'Your email is verified.' };
   }

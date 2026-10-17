@@ -8,7 +8,6 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { VerifyPhoneOtpDto } from './dto/verify-phone-otp.dto';
-import { ClaimOrderDto } from './dto/claim-order.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import type { AuthenticatedUser } from './strategies/jwt.strategy';
 
@@ -44,16 +43,6 @@ export class AuthController {
   @Post('reset-password')
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
-  }
-
-  @Get('claim-order/:token')
-  getClaimOrderInfo(@Param('token') token: string) {
-    return this.authService.getOrderClaimInfo(token);
-  }
-
-  @Post('claim-order')
-  claimOrder(@Body() dto: ClaimOrderDto) {
-    return this.authService.claimOrder(dto);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -9,14 +9,7 @@ import { AuthModule } from './auth/auth.module';
 import { MailModule } from './mail/mail.module';
 import { ContactModule } from './contact/contact.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
-import { Order } from './orders/entities/order.entity';
-import { Consult } from './consults/entities/consult.entity';
-import { User } from './users/entities/user.entity';
-import { PasswordResetToken } from './auth/entities/password-reset-token.entity';
-import { EmailVerificationCode } from './auth/entities/email-verification-code.entity';
-import { PhoneOtp } from './auth/entities/phone-otp.entity';
-import { OrderClaimToken } from './orders/entities/order-claim-token.entity';
-import { NewsletterSubscriber } from './newsletter/entities/newsletter-subscriber.entity';
+import { ENTITIES } from './entities';
 
 @Module({
   imports: [
@@ -34,16 +27,7 @@ import { NewsletterSubscriber } from './newsletter/entities/newsletter-subscribe
         // `User` maps to a table this service doesn't own (see its entity
         // comment) — never let synchronize touch it. `Order`/`Consult` are
         // ours, managed by src/migrations/ instead of synchronize either way.
-        entities: [
-          Order,
-          Consult,
-          User,
-          PasswordResetToken,
-          EmailVerificationCode,
-          PhoneOtp,
-          OrderClaimToken,
-          NewsletterSubscriber,
-        ],
+        entities: ENTITIES,
         migrations: [__dirname + '/migrations/*{.ts,.js}'],
         synchronize: config.get<string>('DB_SYNC', 'false') === 'true',
       }),

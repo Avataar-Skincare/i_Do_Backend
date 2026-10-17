@@ -1,18 +1,11 @@
 import 'dotenv/config';
 import { DataSource } from 'typeorm';
-import { Order } from './orders/entities/order.entity';
-import { Consult } from './consults/entities/consult.entity';
-import { User } from './users/entities/user.entity';
-import { PasswordResetToken } from './auth/entities/password-reset-token.entity';
-import { EmailVerificationCode } from './auth/entities/email-verification-code.entity';
-import { PhoneOtp } from './auth/entities/phone-otp.entity';
-import { OrderClaimToken } from './orders/entities/order-claim-token.entity';
-import { NewsletterSubscriber } from './newsletter/entities/newsletter-subscriber.entity';
+import { ENTITIES } from './entities';
 
 /**
  * For the TypeORM CLI only (migration:generate/run/revert) — the app itself
- * builds its connection via ConfigService in app.module.ts. Kept in sync
- * manually — entities list must match app.module.ts's.
+ * builds its connection via ConfigService in app.module.ts. Both share
+ * the ENTITIES list in src/entities.ts.
  */
 export default new DataSource({
   type: 'postgres',
@@ -21,16 +14,7 @@ export default new DataSource({
   username: process.env.DB_USER ?? 'postgres',
   password: process.env.DB_PASSWORD ?? 'postgres',
   database: process.env.DB_NAME ?? 'lume',
-  entities: [
-    Order,
-    Consult,
-    User,
-    PasswordResetToken,
-    EmailVerificationCode,
-    PhoneOtp,
-    OrderClaimToken,
-    NewsletterSubscriber,
-  ],
+  entities: ENTITIES,
   migrations: ['src/migrations/*.ts'],
   synchronize: false,
 });
