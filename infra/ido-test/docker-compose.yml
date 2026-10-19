@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# ido-test stack — installed at /opt/ido/docker-compose.yml
+#   cp /opt/ido/src/i_Do_Backend/infra/ido-test/docker-compose.yml /opt/ido/
+#
+# Which image each service runs comes from /opt/ido/.env (written by deploy.sh):
+#   WEBSITE_IMAGE / BACKEND_IMAGE / LUME_IMAGE = <ECR registry>/ido/...:<tag>
+# Until CI has deployed a service, it falls back to the locally built image.
+# Secrets are NOT here: they live in /opt/ido/env/*.env (600, never in git).
+# nginx (on the host) proxies the three domains to the 127.0.0.1 ports below.
+# Maintained by: i do platform/infra (contact: Mithilesh)
+# ---------------------------------------------------------------------------
+name: ido
+
+# Shared settings for every service (YAML "anchor": defined once, reused below)
+x-defaults: &defaults
+  restart: unless-stopped
+  init: true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  website:                                   # i do website (Next.js)       test.idowellness.ai
+    <<: *defaults
+    image: ${WEBSITE_IMAGE:-ido-frontend:test}
+    ports:
+      - "127.0.0.1:3000:3000"                # localhost only: nginx is the way in
+    mem_limit: 256m
+    environment:
+      NODE_OPTIONS: --max-old-space-size=192
+
+  backend:                                   # i do website API (NestJS)    test-api.idowellness.ai
+    <<: *defaults
+    image: ${BACKEND_IMAGE:-ido-backend:test}
+    env_file: ./env/backend.env
+    ports:
+      - "127.0.0.1:3001:3001"
+    mem_limit: 320m
+    environment:
+      NODE_OPTIONS: --max-old-space-size=240
+
+  lume:                                      # ring app API (lume-backend)  test-app-api.idowellness.ai
+    <<: *defaults
+    image: ${LUME_IMAGE:-lume-backend:test}
+    env_file: ./env/lume.env
+    ports:
+      - "127.0.0.1:3100:3000"                # server port 3100 -> container port 3000
+    mem_limit: 320m
+    environment:
+      NODE_OPTIONS: --max-old-space-size=240
