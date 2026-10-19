@@ -1,0 +1,91 @@
+# ---------------------------------------------------------------------------
+# Deploy to ido-test: build this repo's image on GitHub (native arm64, matching
+# the Graviton server), push it to ECR, then ask ido-test to run it.
+#
+# Runs on every push to `testing` (= every merged PR) and on demand
+# (Actions → "Deploy to ido-test" → Run workflow).
+#
+# AWS access: OIDC → role ido-github-actions-ecr-push. No AWS keys are stored in
+#   GitHub; the role only trusts the i do repos on testing/main and may only push
+#   to ECR ido/*.
+# Server access: secret IDO_TEST_DEPLOY_SSH_KEY. On the server that key is locked
+#   to /opt/ido/deploy.sh (forced command), which validates the request, runs
+#   migrations, swaps the container and rolls back if it isn't healthy.
+# Repo settings needed: secret IDO_TEST_DEPLOY_SSH_KEY; variables IDO_TEST_HOST,
+#   IDO_TEST_KNOWN_HOSTS.
+# Maintained by: i do platform/infra (contact: Mithilesh)
+# ---------------------------------------------------------------------------
+name: Deploy to ido-test
+
+on:
+  push:
+    branches: [testing]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # lets this job request an OIDC token to show AWS
+  contents: read
+
+concurrency:        # never two deploys of this repo at once; queue, don't cancel
+  group: deploy-ido-test-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  AWS_ROLE: arn:aws:iam::216505943717:role/ido-github-actions-ecr-push
+  ECR_REPOSITORY: ido/website-backend
+  SERVICE: backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to AWS (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Image tag = short commit SHA
+        run: echo "TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Already built? (ECR tags are immutable, so skip a rebuild)
+        id: exists
+        run: |
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.found != 'true'
+
+      - name: Build and push
+        if: steps.exists.outputs.found != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to ido-test
+        env:
+          SSH_KEY: ${{ secrets.IDO_TEST_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.IDO_TEST_KNOWN_HOSTS }}
+          HOST: ${{ vars.IDO_TEST_HOST }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            ec2-user@"$HOST" "deploy $SERVICE $TAG"
