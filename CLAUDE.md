@@ -39,7 +39,7 @@ only `FRONTEND_ORIGIN`.
 
 | Module | Routes | Auth |
 |---|---|---|
-| `auth` | `POST /auth/register`, `/login`, `/phone/send-otp`, `/phone/verify-otp`, `/forgot-password`, `/reset-password`, `GET+POST /auth/claim-order` | public |
+| `auth` | `POST /auth/register`, `/login`, `/phone/send-otp`, `/phone/verify-otp`, `/forgot-password`, `/reset-password` | public |
 | | `GET /auth/me`, `POST /auth/verify-email`, `/resend-verification`, `DELETE /auth/me` | JWT |
 | `orders` | `POST /orders/razorpay-order`, `POST /orders`, `GET /orders/mine` | JWT |
 | | `GET /orders/:id` | **public by design** (unguessable id, confirmation-link pattern) |
@@ -48,6 +48,10 @@ only `FRONTEND_ORIGIN`.
 | `contact` | `POST /contact` (emails support) | public |
 | `newsletter` | `POST /newsletter/subscribe` | public |
 | `health` | `GET /health` | public |
+
+⚠️ **Mid-rebuild (LLD v1.4, since 2026-10-17):** the claim-order flow is gone, and `POST /orders`,
+`POST /consults` and consult reschedule throw `NotImplemented` until the new endpoints land (see the
+i do Dev Sync doc for the API contract). The schema is already v1.4 — migrations M13–M20.
 | `users`, `mail`, `payments`, `sms` | no routes — internal services | — |
 
 ### Auth
@@ -104,10 +108,15 @@ back to `PENDING`. `name/phone/email` are denormalised onto the row so ops never
 
 ## Database
 
-Own Postgres database (`ido_website`), separate from LUME's `lume-test` RDS instance.
+Own Postgres database, separate from the ring app's `lume` database (no shared tables or users).
+- **Test:** `ido_website_test` on the `lume-test` RDS instance (PG 18.3), logging in as `lume` (same
+  login as lume-backend, by choice). **Prod (from 29 Oct):** `ido_website` on `ido-prod` RDS.
+- RDS rejects unencrypted connections: set `DB_SSL=true` there (encrypts, doesn't yet verify the CA).
 - `DB_SYNC=false` always — schema changes go through `src/migrations/`.
-- `src/data-source.ts` (CLI) and `app.module.ts` (runtime) each list the entities **by hand** —
-  add a new entity to both or migrations will silently miss it.
+- Entities are listed once, in **`src/entities.ts`**, used by both `src/data-source.ts` (CLI) and
+  `app.module.ts` (runtime) — add a new entity there.
+- Migrations in the deployed image: `npm run migration:run:prod` / `migration:show:prod` (compiled
+  `dist/data-source.js`). On ido-test they run automatically on every deploy.
 - Code defaults fall back to `DB_NAME=lume`, `DB_PORT=5432` if `.env` is missing — always set `.env`.
 
 ## Env
@@ -115,20 +124,35 @@ Own Postgres database (`ido_website`), separate from LUME's `lume-test` RDS inst
 See `.env.example`. Never commit `.env`. Notable: `PARTNER_APP_API_KEY` (partner-app-server sends
 it as `x-api-key`), `RAZORPAY_KEY_ID/SECRET` (use `rzp_test_` keys), `AWS_SES_*` +
 `MAIL_FROM_ADDRESS=support@idowellness.ai` (domain must be SES-verified), `FAST2SMS_*`,
-`MESSENGER_*` (blank = WhatsApp copy skipped with a warning).
+`MESSENGER_*` (blank = WhatsApp copy skipped with a warning), `DB_SSL` (`true` on RDS).
+Deployed env files live on the server (`/opt/ido/env/*.env`, `600`), never in git or CI.
 
-## Hosting (planned, nothing live yet — 2026-10-14)
+## Hosting and deploys (live on test since 2026-10-19)
 
-Not deployed. Agreed so far: **everything for the ring on one new dedicated EC2 box**, separate from
-Avataar's Prod/Test Instances — this service, `i_Do_Frontend`, `lume-backend` (ring app API) and a
-future ring ops dashboard, each with prod + staging, under Docker Compose behind nginx.
-Database: new RDS Postgres **`ring-prod`** (PG 18.3) holding two databases, `lume` and
-`ido_website`, with separate logins; existing `lume-test` becomes staging (+ `ido_website_test`).
-Domain `idowellness.ai`. Shared AWS context: `../CLAUDE.md`. AWS access from Claude is read-only.
-**Note:** `../CLAUDE.md` and `../docker-compose.yml` (the root `Lume_website/` folder shared with
-`i_Do_Frontend`) are not actually tracked by git anywhere — that parent folder isn't a repo at all,
-so neither file currently has any backup or history. Needs a decision: move both into one of the two
-app repos, or give the shared root its own small repo.
+| | Test (now) | Prod (from 29 Oct) |
+|---|---|---|
+| Server | **ido-test** EC2 `i-050ce6ef001e22c54`, t4g.micro arm64, `3.108.140.58` | **ido-prod** (to be created) |
+| This API | `https://test-api.idowellness.ai` | `https://api.idowellness.ai` (planned) |
+| Website / ring app API | `test.` / `test-app-api.idowellness.ai` | `idowellness.ai` / `app-api.` (planned) |
+| Database | `ido_website_test` on `lume-test` | `ido_website` on `ido-prod` RDS |
+| Payments | Razorpay **test** keys | live keys at launch |
+
+**Branches:** feature → PR into **`testing`** → deployed to ido-test automatically → PR `testing` →
+`main` (prod). Never push straight to `main`.
+
+**How a deploy works** (`.github/workflows/deploy-ido-test.yml`, on every push to `testing`):
+GitHub builds the image on an arm64 runner → logs in to AWS by OIDC (role
+`ido-github-actions-ecr-push`; no AWS keys in GitHub) → pushes ECR `ido/website-backend:<short sha>`
+(immutable tags) → SSHes to ido-test with a CI-only key that is locked to `/opt/ido/deploy.sh` →
+the script pulls the image (server IAM role `ido-test-ec2`), runs migrations, swaps the container,
+waits for the HEALTHCHECK and **rolls back** to the previous image if it isn't healthy.
+Logs: the repo's Actions tab, and `/opt/ido/deploy.log` on the server.
+
+**Server layout** (`/opt/ido`, definitions in this repo under **`infra/ido-test/`**):
+`docker-compose.yml` (services `website`, `backend`, `lume`; image per service from `/opt/ido/.env`)
+· `deploy.sh` · `env/backend.env`, `env/lume.env` (secrets) · `src/` (read-only deploy-key clones).
+nginx runs on the host (`/etc/nginx/conf.d/ido-test-*.conf`) with a Let's Encrypt certificate that
+renews itself. Shared AWS context: `../CLAUDE.md`. AWS access from Claude is read-only.
 
 ## Known gaps (as of 2026-10-14)
 
@@ -139,9 +163,9 @@ app repos, or give the shared root its own small repo.
 - ⚠️ **Phone OTP has no rate limit and no attempt cap.** `/auth/phone/send-otp` can be called
   unboundedly (SMS-pumping cost on Fast2SMS) and a 6-digit code can be guessed repeatedly until it
   expires. Needs `@nestjs/throttler` + a per-code attempt counter.
-- `docker-compose.yml` is referenced (in `.env.example` and the frontend Dockerfile) but not committed.
+- The deployed compose file is `infra/ido-test/docker-compose.yml`; there is still no local-dev compose file.
 - Port mismatch: `.env.example` uses 3011, `Dockerfile` EXPOSEs 3001, frontend `lib/api.ts` defaults
   to `http://localhost:3001`. Set `NEXT_PUBLIC_API_URL` explicitly.
 - Order `status` beyond `placed` has no writer — no admin/fulfilment endpoint exists yet.
 - Razorpay webhooks are not handled (a closed tab after payment = paid but no order row).
-- No deployment, CI, or unit tests yet. README is the Nest boilerplate.
+- No unit tests yet, and CI only builds + deploys (no test step). README is the Nest boilerplate.
