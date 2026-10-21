@@ -1,4 +1,11 @@
-import { BadRequestException, ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, MoreThan, Repository } from 'typeorm';
@@ -23,6 +30,7 @@ import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailVerificationCode } from './entities/email-verification-code.entity';
 import { PhoneOtp } from './entities/phone-otp.entity';
 import { EmailOtp } from './entities/email-otp.entity';
+import { RefreshToken, type TokenClient } from './entities/refresh-token.entity';
 import { Fast2SmsService } from '../sms/fast2sms.service';
 import { WhatsappService } from '../sms/whatsapp.service';
 import type { User } from '../users/entities/user.entity';
@@ -37,6 +45,14 @@ const OTP_RESEND_GAP_MS = 30 * 1000;
 const OTP_PER_ADDRESS_PER_HOUR = 5;
 const OTP_MAX_WRONG_ATTEMPTS = 5;
 const HOUR_MS = 60 * 60 * 1000;
+const REFRESH_TTL_MS = 60 * 24 * 60 * 60 * 1000; // 60 days for web and app (ops sessions are 12 h, added with the staff login)
+const ACCESS_TTL_FALLBACK_MS = 15 * 60 * 1000;
+
+/** Who is logging in and from where: stored on the refresh token for audit. */
+export type SessionContext = { client: TokenClient; ip?: string; userAgent?: string };
+/** `accessToken` + `refreshToken` go in cookies for the website and in the body for the app. */
+export type Session = { accessToken: string; refreshToken: string; accessTokenExpiresAt: Date };
+export type SessionResult = { user: PublicUser; session: Session };
 /** Same response whether or not the account is registered — never confirms/denies one exists. */
 const FORGOT_PASSWORD_RESPONSE = { message: "If an account exists for that email, we've sent a reset link." };
 
@@ -73,6 +89,8 @@ export class AuthService {
     private readonly phoneOtpRepo: Repository<PhoneOtp>,
     @InjectRepository(EmailOtp)
     private readonly emailOtpRepo: Repository<EmailOtp>,
+    @InjectRepository(RefreshToken)
+    private readonly refreshTokensRepo: Repository<RefreshToken>,
     private readonly fast2SmsService: Fast2SmsService,
     private readonly whatsappService: WhatsappService,
   ) {}
@@ -140,7 +158,7 @@ export class AuthService {
    * phone accounts are passwordless, every login is a fresh OTP); if it
    * already exists, verifying just logs them in.
    */
-  async verifyPhoneOtp(dto: VerifyPhoneOtpDto): Promise<{ user: PublicUser; token: string }> {
+  async verifyPhoneOtp(dto: VerifyPhoneOtpDto, ctx: SessionContext): Promise<SessionResult> {
     const codeHash = crypto.createHash('sha256').update(dto.code).digest('hex');
     const verification = await this.phoneOtpRepo.findOne({
       where: { phone: dto.phone, codeHash },
@@ -163,7 +181,7 @@ export class AuthService {
       user.phoneVerifiedAt = new Date();
     }
 
-    return { user: toPublicUser(user), token: this.signToken(user) };
+    return { user: toPublicUser(user), session: await this.issueSession(user, ctx) };
   }
 
   /**
@@ -205,7 +223,7 @@ export class AuthService {
    * (no password, every login is a fresh code); an existing account is just logged in. Five wrong
    * guesses burn the code.
    */
-  async verifyEmailOtp(dto: VerifyEmailOtpDto): Promise<{ user: PublicUser; token: string }> {
+  async verifyEmailOtp(dto: VerifyEmailOtpDto, ctx: SessionContext): Promise<SessionResult> {
     const otp = await this.emailOtpRepo.findOne({
       where: { email: dto.email, usedAt: IsNull() },
       order: { createdAt: 'DESC' },
@@ -234,7 +252,90 @@ export class AuthService {
       user.emailVerifiedAt = new Date();
     }
 
-    return { user: toPublicUser(user), token: this.signToken(user) };
+    return { user: toPublicUser(user), session: await this.issueSession(user, ctx) };
+  }
+
+  /**
+   * Rotation: a valid, not-yet-rotated refresh token is consumed and exchanged for a brand-new pair
+   * in the same family. If a token that was already rotated is presented again, someone copied it
+   * after the real owner moved on: the whole family is revoked (reason 'reuse') and everyone on it
+   * must log in again.
+   */
+  async refreshSession(rawRefreshToken: string, ctx: SessionContext): Promise<SessionResult> {
+    const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
+    const existing = await this.refreshTokensRepo.findOne({ where: { tokenHash } });
+    if (!existing || existing.revokedAt || existing.expiresAt < new Date()) throw this.sessionExpired();
+
+    if (existing.rotatedAt) {
+      await this.refreshTokensRepo.update(
+        { familyId: existing.familyId, revokedAt: IsNull() },
+        { revokedAt: new Date(), revokedReason: 'reuse' },
+      );
+      this.logger.warn(`Reused refresh token for user ${existing.userId}: family ${existing.familyId} revoked`);
+      throw this.sessionExpired();
+    }
+
+    const user = await this.usersService.findById(existing.userId);
+    if (!user) throw this.sessionExpired();
+
+    // Conditional update: if two requests present the same token at once, only one rotates it.
+    const claimed = await this.refreshTokensRepo.update(
+      { id: existing.id, rotatedAt: IsNull() },
+      { rotatedAt: new Date() },
+    );
+    if (!claimed.affected) throw this.sessionExpired();
+
+    return {
+      user: toPublicUser(user),
+      session: await this.issueSession(user, { ...ctx, client: existing.client }, existing),
+    };
+  }
+
+  /** Revokes the whole family so a stolen refresh token can't outlive the logout meant to end it. */
+  async logoutSession(rawRefreshToken: string): Promise<void> {
+    const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
+    const existing = await this.refreshTokensRepo.findOne({ where: { tokenHash } });
+    if (!existing) return;
+    await this.refreshTokensRepo.update(
+      { familyId: existing.familyId, revokedAt: IsNull() },
+      { revokedAt: new Date(), revokedReason: 'logout' },
+    );
+  }
+
+  private sessionExpired(): UnauthorizedException {
+    return new UnauthorizedException({
+      statusCode: HttpStatus.UNAUTHORIZED,
+      message: 'Your session has expired. Please log in again.',
+      code: 'UNAUTHORIZED',
+    });
+  }
+
+  /**
+   * An access token and a separate refresh token, issued together. A fresh login starts a new
+   * family; a rotation continues the parent's family. Only the sha256 of the refresh token is stored.
+   */
+  private async issueSession(user: User, ctx: SessionContext, parent?: RefreshToken): Promise<Session> {
+    const refreshToken = crypto.randomBytes(32).toString('hex');
+    await this.refreshTokensRepo.save(
+      this.refreshTokensRepo.create({
+        userId: user.id,
+        familyId: parent?.familyId ?? crypto.randomUUID(),
+        parentId: parent?.id ?? null,
+        tokenHash: crypto.createHash('sha256').update(refreshToken).digest('hex'),
+        client: ctx.client,
+        expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
+        ip: ctx.ip ?? null,
+        userAgent: ctx.userAgent ?? null,
+      }),
+    );
+
+    const accessToken = this.signToken(user);
+    const exp = (this.jwtService.decode(accessToken) as { exp?: number } | null)?.exp;
+    return {
+      accessToken,
+      refreshToken,
+      accessTokenExpiresAt: new Date(exp ? exp * 1000 : Date.now() + ACCESS_TTL_FALLBACK_MS),
+    };
   }
 
   private async enforceEmailOtpLimits(email: string, ip?: string): Promise<void> {
@@ -402,6 +503,7 @@ export class AuthService {
   }
 
   private signToken(user: User): string {
-    return this.jwtService.sign({ sub: user.id, email: user.email, role: user.role });
+    // No email or phone inside: a JWT is only base64, anyone holding it can read the payload.
+    return this.jwtService.sign({ sub: user.id, role: user.role });
   }
 }
