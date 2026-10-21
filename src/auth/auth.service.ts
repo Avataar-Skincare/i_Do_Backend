@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { IsNull, MoreThan, Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
@@ -16,9 +16,13 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { VerifyPhoneOtpDto } from './dto/verify-phone-otp.dto';
+import { SendEmailOtpDto } from './dto/send-email-otp.dto';
+import { VerifyEmailOtpDto } from './dto/verify-email-otp.dto';
+import { OtpInvalidException, OtpRateLimitException } from './otp-errors';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailVerificationCode } from './entities/email-verification-code.entity';
 import { PhoneOtp } from './entities/phone-otp.entity';
+import { EmailOtp } from './entities/email-otp.entity';
 import { Fast2SmsService } from '../sms/fast2sms.service';
 import { WhatsappService } from '../sms/whatsapp.service';
 import type { User } from '../users/entities/user.entity';
@@ -27,6 +31,12 @@ const SALT_ROUNDS = 12;
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 const VERIFICATION_CODE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const PHONE_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const EMAIL_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+/** Same limits as the phone OTP in the API contract: 1 per 30 s and 5 per hour per address, N per hour per IP. */
+const OTP_RESEND_GAP_MS = 30 * 1000;
+const OTP_PER_ADDRESS_PER_HOUR = 5;
+const OTP_MAX_WRONG_ATTEMPTS = 5;
+const HOUR_MS = 60 * 60 * 1000;
 /** Same response whether or not the account is registered — never confirms/denies one exists. */
 const FORGOT_PASSWORD_RESPONSE = { message: "If an account exists for that email, we've sent a reset link." };
 
@@ -61,6 +71,8 @@ export class AuthService {
     private readonly verificationCodesRepo: Repository<EmailVerificationCode>,
     @InjectRepository(PhoneOtp)
     private readonly phoneOtpRepo: Repository<PhoneOtp>,
+    @InjectRepository(EmailOtp)
+    private readonly emailOtpRepo: Repository<EmailOtp>,
     private readonly fast2SmsService: Fast2SmsService,
     private readonly whatsappService: WhatsappService,
   ) {}
@@ -152,6 +164,103 @@ export class AuthService {
     }
 
     return { user: toPublicUser(user), token: this.signToken(user) };
+  }
+
+  /**
+   * Passwordless email login. Works the same for a new and an existing address (the first
+   * successful verify creates the account), and never says whether an account exists.
+   * Any code still outstanding for this address is invalidated before a fresh one is sent.
+   */
+  async sendEmailOtp(dto: SendEmailOtpDto, ip?: string): Promise<{ message: string }> {
+    await this.enforceEmailOtpLimits(dto.email, ip);
+    await this.emailOtpRepo.update({ email: dto.email, usedAt: IsNull() }, { usedAt: new Date() });
+
+    const code = generateOtp();
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    await this.emailOtpRepo.save(
+      this.emailOtpRepo.create({
+        email: dto.email,
+        codeHash,
+        expiresAt: new Date(Date.now() + EMAIL_OTP_TTL_MS),
+        ip: ip ?? null,
+      }),
+    );
+
+    await this.mailService.sendEmail({
+      to: dto.email,
+      subject: `${code} is your i do login code`,
+      html: `
+        <p>Hi,</p>
+        <p>Your i do login code is:</p>
+        <p style="font-size: 28px; font-weight: 700; letter-spacing: 4px;">${code}</p>
+        <p>This code expires in 10 minutes. If you didn't try to log in to i do, you can ignore this email.</p>
+      `,
+    });
+
+    return { message: 'A verification code has been sent to your email.' };
+  }
+
+  /**
+   * One call does double duty, like the phone flow: an address with no account gets one created
+   * (no password, every login is a fresh code); an existing account is just logged in. Five wrong
+   * guesses burn the code.
+   */
+  async verifyEmailOtp(dto: VerifyEmailOtpDto): Promise<{ user: PublicUser; token: string }> {
+    const otp = await this.emailOtpRepo.findOne({
+      where: { email: dto.email, usedAt: IsNull() },
+      order: { createdAt: 'DESC' },
+    });
+    if (!otp || otp.expiresAt < new Date() || otp.attempts >= OTP_MAX_WRONG_ATTEMPTS) throw new OtpInvalidException();
+
+    const given = crypto.createHash('sha256').update(dto.code).digest();
+    const stored = Buffer.from(otp.codeHash, 'hex');
+    if (given.length !== stored.length || !crypto.timingSafeEqual(given, stored)) {
+      const attempts = otp.attempts + 1;
+      await this.emailOtpRepo.update(
+        { id: otp.id },
+        { attempts, ...(attempts >= OTP_MAX_WRONG_ATTEMPTS ? { usedAt: new Date() } : {}) },
+      );
+      throw new OtpInvalidException();
+    }
+
+    // Conditional update: if two requests race with the right code, only one gets to use it.
+    const claimed = await this.emailOtpRepo.update({ id: otp.id, usedAt: IsNull() }, { usedAt: new Date() });
+    if (!claimed.affected) throw new OtpInvalidException();
+
+    let user = await this.usersService.findByEmailInsensitive(dto.email);
+    if (!user) user = await this.usersService.create({ email: dto.email, fullName: dto.fullName });
+    if (!user.emailVerifiedAt) {
+      await this.usersService.markEmailVerified(user.id);
+      user.emailVerifiedAt = new Date();
+    }
+
+    return { user: toPublicUser(user), token: this.signToken(user) };
+  }
+
+  private async enforceEmailOtpLimits(email: string, ip?: string): Promise<void> {
+    const now = Date.now();
+    const sinceHour = new Date(now - HOUR_MS);
+    const recent = await this.emailOtpRepo.find({
+      where: { email, createdAt: MoreThan(sinceHour) },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (recent.length > 0) {
+      const wait = OTP_RESEND_GAP_MS - (now - recent[0].createdAt.getTime());
+      if (wait > 0) {
+        const seconds = Math.ceil(wait / 1000);
+        throw new OtpRateLimitException(`Please wait ${seconds} seconds before asking for another code.`, seconds);
+      }
+    }
+    if (recent.length >= OTP_PER_ADDRESS_PER_HOUR) {
+      const seconds = Math.max(1, Math.ceil((recent[recent.length - 1].createdAt.getTime() + HOUR_MS - now) / 1000));
+      throw new OtpRateLimitException('Too many codes requested. Please try again later.', seconds);
+    }
+
+    const ipLimit = this.config.get<number>('OTP_IP_HOURLY_LIMIT', 20);
+    if (ip && (await this.emailOtpRepo.count({ where: { ip, createdAt: MoreThan(sinceHour) } })) >= ipLimit) {
+      throw new OtpRateLimitException('Too many codes requested. Please try again later.', 600);
+    }
   }
 
   async me(userId: string): Promise<PublicUser> {

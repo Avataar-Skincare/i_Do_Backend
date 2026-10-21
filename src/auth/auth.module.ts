@@ -15,10 +15,11 @@ import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailVerificationCode } from './entities/email-verification-code.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { PhoneOtp } from './entities/phone-otp.entity';
+import { EmailOtp } from './entities/email-otp.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PasswordResetToken, EmailVerificationCode, PhoneOtp, RefreshToken]),
+    TypeOrmModule.forFeature([PasswordResetToken, EmailVerificationCode, PhoneOtp, EmailOtp, RefreshToken]),
     UsersModule,
     OrdersModule,
     ConsultsModule,

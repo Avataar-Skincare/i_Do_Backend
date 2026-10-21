@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Body, Controller, Delete, Get, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -8,6 +8,9 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { VerifyPhoneOtpDto } from './dto/verify-phone-otp.dto';
+import { SendEmailOtpDto } from './dto/send-email-otp.dto';
+import { VerifyEmailOtpDto } from './dto/verify-email-otp.dto';
+import { OtpRateLimitException } from './otp-errors';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import type { AuthenticatedUser } from './strategies/jwt.strategy';
 
@@ -33,6 +36,21 @@ export class AuthController {
   @Post('phone/verify-otp')
   verifyPhoneOtp(@Body() dto: VerifyPhoneOtpDto) {
     return this.authService.verifyPhoneOtp(dto);
+  }
+
+  @Post('email/send-otp')
+  async sendEmailOtp(@Body() dto: SendEmailOtpDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    try {
+      return await this.authService.sendEmailOtp(dto, req.ip);
+    } catch (err) {
+      if (err instanceof OtpRateLimitException) res.setHeader('Retry-After', String(err.retryAfterSeconds));
+      throw err;
+    }
+  }
+
+  @Post('email/verify-otp')
+  verifyEmailOtp(@Body() dto: VerifyEmailOtpDto) {
+    return this.authService.verifyEmailOtp(dto);
   }
 
   @Post('forgot-password')
