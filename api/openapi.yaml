@@ -325,6 +325,124 @@ paths:
                     statusCode: 401
                     message: That code is invalid or has expired.
                     code: OTP_INVALID
+  /auth/email/send-otp:
+    post:
+      tags: [Auth]
+      operationId: sendEmailOtp
+      security: []
+      summary: Send a login OTP by email (passwordless; works for a new or an existing address)
+      description: |
+        Passwordless email login, the email twin of `/auth/phone/send-otp`. The response never says whether an account
+        exists. Any code still outstanding for this address is invalidated. Code valid 10 minutes.
+        Rate limits: 1 per 30 s and 5 per hour per address, 20 per hour per IP.
+      x-lld: N
+      parameters:
+        - $ref: '#/components/parameters/XRequestedWith'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  maxLength: 254
+                  description: Trimmed and lower-cased by the server.
+            example:
+              email: ananya.sharma@example.com
+      responses:
+        '201':
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+              example:
+                message: A verification code has been sent to your email.
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          description: Too many OTP requests.
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                OTP_RATE_LIMIT:
+                  value:
+                    statusCode: 429
+                    message: Please wait 30 seconds before asking for another code.
+                    code: OTP_RATE_LIMIT
+  /auth/email/verify-otp:
+    post:
+      tags: [Auth]
+      operationId: verifyEmailOtp
+      security: []
+      summary: Log in / sign up with the emailed OTP
+      description: |
+        The email twin of `/auth/phone/verify-otp`. Creates the account on first verify (no password), marks the email
+        verified, and sets `ido_at` + `ido_rt` cookies (website) or returns tokens in the body (app, `X-Client app`).
+        5 wrong attempts burn the code.
+      x-lld: N
+      parameters:
+        - $ref: '#/components/parameters/XRequestedWith'
+        - $ref: '#/components/parameters/XClient'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  maxLength: 254
+                code:
+                  type: string
+                  pattern: '^\d{6}$'
+                fullName:
+                  type: string
+                  maxLength: 120
+                  description: Used only when this email has no account yet.
+            example:
+              email: ananya.sharma@example.com
+              code: '123456'
+              fullName: Ananya Sharma
+      responses:
+        '200':
+          description: Logged in
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetCookieCustomer'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+              examples:
+                web:
+                  $ref: '#/components/examples/AuthSessionWeb'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          description: Wrong, expired or burned code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                OTP_INVALID:
+                  value:
+                    statusCode: 401
+                    message: That code is invalid or has expired.
+                    code: OTP_INVALID
   /auth/register:
     post:
       tags: [Auth]

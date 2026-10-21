@@ -2,6 +2,7 @@ import { User } from './users/entities/user.entity';
 import { PasswordResetToken } from './auth/entities/password-reset-token.entity';
 import { EmailVerificationCode } from './auth/entities/email-verification-code.entity';
 import { PhoneOtp } from './auth/entities/phone-otp.entity';
+import { EmailOtp } from './auth/entities/email-otp.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { Setting } from './settings/entities/setting.entity';
 import { Sku } from './catalog/entities/sku.entity';
@@ -30,6 +31,7 @@ export const ENTITIES = [
   PasswordResetToken,
   EmailVerificationCode,
   PhoneOtp,
+  EmailOtp,
   RefreshToken,
   Setting,
   Sku,

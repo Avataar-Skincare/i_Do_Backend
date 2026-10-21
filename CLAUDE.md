@@ -39,7 +39,8 @@ only `FRONTEND_ORIGIN`.
 
 | Module | Routes | Auth |
 |---|---|---|
-| `auth` | `POST /auth/register`, `/login`, `/phone/send-otp`, `/phone/verify-otp`, `/forgot-password`, `/reset-password` | public |
+| `auth` | `POST /auth/email/send-otp`, `/email/verify-otp`, `/phone/send-otp`, `/phone/verify-otp`, `/refresh`, `/logout` | public |
+| | `POST /auth/register`, `/login`, `/forgot-password`, `/reset-password` (password flows, kept until removed by decision) | public |
 | | `GET /auth/me`, `POST /auth/verify-email`, `/resend-verification`, `DELETE /auth/me` | JWT |
 | `orders` | `POST /orders/razorpay-order`, `POST /orders`, `GET /orders/mine` | JWT |
 | | `GET /orders/:id` | **public by design** (unguessable id, confirmation-link pattern) |
@@ -55,11 +56,22 @@ i do Dev Sync doc for the API contract). The schema is already v1.4 — migratio
 | `users`, `mail`, `payments`, `sms` | no routes — internal services | — |
 
 ### Auth
-Two kinds of account (one of email/phone always set, never both required):
-- **Email:** `POST /auth/register` + `/auth/login` with email + password. Signup sends a 6-digit
-  code (hashed, 15-min expiry); the account holds no session until `/auth/verify-email`.
-- **Phone — passwordless:** `/auth/phone/send-otp` → `/auth/phone/verify-otp`. Verify creates the
+Two kinds of account (one of email/phone always set, never both required). Both log in the same
+passwordless way: send a 6-digit code, verify it, and the verify call creates the account on first
+use (no password) or logs an existing one in.
+- **Email OTP** (decided final 2026-10-21): `/auth/email/send-otp` → `/auth/email/verify-otp`, mail via
+  SES (`src/mail`). Table `email_otps` (hashed code, `attempts`, `ip`). Valid 10 min; limits: 1 per
+  30 s and 5 per hour per address, `OTP_IP_HOURLY_LIMIT` (default 20) per IP, all 429 `OTP_RATE_LIMIT`
+  with `Retry-After`; 5 wrong guesses burn the code (401 `OTP_INVALID`). Addresses are lower-cased;
+  lookups of existing users are case-insensitive. `main.ts` sets `trust proxy` to 1 so the IP limit
+  sees the real client behind nginx (nginx must send `X-Forwarded-For`).
+- The old email + password routes (`register`, `login`, `forgot-password`, `reset-password`,
+  `verify-email`) and their tables/column (`password_hash`, `password_reset_tokens`,
+  `email_verification_codes`) are **still in the schema, as the LLD keeps them**. Removing them
+  needs a decision and a migration; do not drop them casually.
+- **Phone OTP:** `/auth/phone/send-otp` → `/auth/phone/verify-otp`. Verify creates the
   account on first use (`passwordHash` null, `phoneVerifiedAt` set). Every login is a fresh OTP.
+  (Phone does not yet have the rate limits / attempt cap the email flow has; that is week-2 work.)
   SMS via `src/sms/fast2sms.service.ts` (failures throw — the customer must know); a WhatsApp copy
   via `src/sms/whatsapp.service.ts` is best-effort and never blocks. Both currently reuse
   **Avataar's** DLT sender ID / templates (`AVTSKC`, `185443`, `otp9`) — needs i do's own before launch.
@@ -72,16 +84,23 @@ Two kinds of account (one of email/phone always set, never both required):
   Confirmed via a real phone screenshot that the Messenger-gateway mechanism genuinely works in Client's
   production (a native Meta WhatsApp "Authentication" template, Copy Code button) — its credentials just
   live in that production server's own env config, not in the local `Client` checkout's `.env`.
-- JWT payload `{ sub, email, role }`, `JWT_EXPIRES_IN` (7d). Frontend stores it in `localStorage`.
+- **Sessions** (LLD §9, TD-19): the access token is an **ES256** JWT (15 min; claims `iss`, `aud`, `sub`,
+  `role`, header `kid`; no email or phone inside), signed with `AUTH_PRIVATE_KEY` and verified with
+  `AUTH_PUBLIC_KEY` (PEM, `\n`-escaped on one line; see `.env.example`). There is **no** shared-secret
+  fallback and the app refuses to start without both keys. The website gets HttpOnly cookies
+  `ido_at` (Path=/, 15 min) and `ido_rt` (Path=/auth, 60 days), host-only, SameSite=Lax; the app
+  (`X-Client: app`) gets the tokens in the response body and uses `Authorization: Bearer`.
+  `POST /auth/refresh` rotates the refresh token inside its family (`refresh_tokens`, M14 schema);
+  presenting an already-rotated token revokes the whole family (`revoked_reason = 'reuse'`).
+  `POST /auth/logout` revokes the family and always returns 204. `JwtAuthGuard` requires
+  `X-Requested-With: ido` on state-changing requests that use the cookie. Code: `cookies.ts`,
+  `jwt-keys.ts`, `strategies/jwt.strategy.ts`, `jwt-auth.guard.ts`, `AuthService.issueSession/refreshSession`.
+  Staff (`ido_ops_*` cookies, `aud=ops`, 12 h) are not built yet.
 - Password-reset tokens, email OTPs and order-claim tokens are all stored **hashed**, single-use,
   expiring. Keep that pattern for any new token type.
 - Missing email/phone on an account is backfilled from the first order/consult that supplies it —
   never overwritten once set.
 - `DELETE /auth/me` anonymises orders (kept for accounting), hard-deletes consults, then the user.
-- **`claim-order`** (`GET /auth/claim-order/:token`, `POST /auth/claim-order`): lets someone turn a
-  historical guest order (from before 2026-09-30, when guest checkout was removed) into a real
-  account via an emailed link — the link itself is the proof of inbox ownership, same trust model as
-  password reset. Attaches every guest order under that email, not just the one the link was for.
 
 ### Orders & payments (Razorpay)
 1. Frontend computes the total → `POST /orders/razorpay-order { amount }` creates a Razorpay order.

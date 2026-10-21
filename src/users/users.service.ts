@@ -14,6 +14,14 @@ export class UsersService {
     return this.usersRepo.findOne({ where: { email } });
   }
 
+  /** Email OTP lower-cases addresses; older password signups may have kept their original case. */
+  findByEmailInsensitive(email: string): Promise<User | null> {
+    return this.usersRepo
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = :email', { email: email.toLowerCase() })
+      .getOne();
+  }
+
   findByPhone(phone: string): Promise<User | null> {
     return this.usersRepo.findOne({ where: { phone } });
   }
