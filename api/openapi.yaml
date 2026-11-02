@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: i do website API
-  version: 1.0.0
+  version: 1.0.1
   summary: Backend contract for idowellness.ai (shop, account, ops dashboard), LLD v1.4 FINAL.
   description: |
     The agreed contract between i_Do_Backend (NestJS) and the i do website / ops dashboard.
@@ -977,6 +977,8 @@ paths:
         order (payment_capture=1) to open Checkout with. `cod` → order `cod_pending` (ops confirm by phone/WhatsApp; total incl.
         ₹100 fee is paid in full when the sizing kit is delivered).
         Same `Idempotency-Key` again → the same order (200) — use this after "Payment not completed. Try again".
+        Same key with different details → 409 `IDEMPOTENCY_KEY_REUSED` (decided 22 Oct): generate a new key whenever the
+        customer changes anything ("Change details"); reuse it only for "Try payment again".
       x-lld: C
       security:
         - customerCookie: []
@@ -1058,7 +1060,9 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
-          description: COD not available for this pincode (or COD switched off).
+          description: |
+            COD not available for this pincode (or COD switched off); or this Idempotency-Key was already used for an
+            order with different details (send a new key).
           content:
             application/json:
               schema:
@@ -1069,8 +1073,15 @@ paths:
                     statusCode: 409
                     message: Cash on Delivery isn't available for this pincode. Please pay online.
                     code: COD_NOT_SERVICEABLE
+                IDEMPOTENCY_KEY_REUSED:
+                  value:
+                    statusCode: 409
+                    message: This Idempotency-Key was already used for an order with different details. Send a new key.
+                    code: IDEMPOTENCY_KEY_REUSED
         '503':
-          description: Launch gate closed (prices, kit price, GSTIN, HSN, seller state or support contacts not set).
+          description: |
+            Launch gate closed (prices, kit price, GSTIN, HSN, seller state or support contacts not set); or Razorpay
+            could not create the payment order (nothing is saved — retry with the same key).
           content:
             application/json:
               schema:
@@ -1081,6 +1092,11 @@ paths:
                     statusCode: 503
                     message: The store isn't open yet.
                     code: STORE_NOT_LIVE
+                PAYMENT_GATEWAY_UNAVAILABLE:
+                  value:
+                    statusCode: 503
+                    message: Payments are temporarily unavailable. Please try again.
+                    code: PAYMENT_GATEWAY_UNAVAILABLE
   /orders/mine:
     get:
       tags: [Orders]
@@ -3426,7 +3442,8 @@ components:
         Generic: VALIDATION_FAILED (400), UNAUTHORIZED (401), FORBIDDEN (403), NOT_FOUND (404).
         Added by this contract for rules the LLD states without naming a code: OTP_INVALID (wrong/expired/burned
         OTP), EMAIL_IN_USE (register), CONSENT_REQUIRED (consult booking needs health consent, §9),
-        SETTING_READ_ONLY (PATCH /admin/settings on a read-only key).
+        SETTING_READ_ONLY (PATCH /admin/settings on a read-only key), IDEMPOTENCY_KEY_REUSED (POST /orders, same key
+        with different details), PAYMENT_GATEWAY_UNAVAILABLE (POST /orders, Razorpay order creation failed).
       enum:
         - VALIDATION_FAILED
         - UNAUTHORIZED
@@ -3459,6 +3476,8 @@ components:
         - DATE_OUTSIDE_WINDOW
         - CONSENT_REQUIRED
         - SETTING_READ_ONLY
+        - IDEMPOTENCY_KEY_REUSED
+        - PAYMENT_GATEWAY_UNAVAILABLE
     Message:
       type: object
       required: [message]

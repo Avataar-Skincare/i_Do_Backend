@@ -1,58 +1,31 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize,
-  IsArray,
   IsEmail,
   IsIn,
-  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
-  Min,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
+import type { Finish } from '../../catalog/entities/sku.entity';
 import type { PaymentMethod } from '../entities/order.entity';
 
-// TODO(LLD v1.4 §5): legacy cart DTO kept only so OrdersController compiles;
-// replace with {finish, paymentMethod, idempotencyKey, address, gstin?}.
-
-class CartItemDto {
-  @IsString()
-  @IsNotEmpty()
-  id: string;
-
-  @IsString()
-  @IsNotEmpty()
-  name: string;
-
-  @IsString()
-  finish: string;
-
-  @IsString()
-  size: string;
-
-  @IsInt()
-  @Min(0)
-  price: number;
-
-  @IsInt()
-  @Min(1)
-  qty: number;
-
-  @IsString()
-  image: string;
-}
-
+/**
+ * POST /orders body (api/openapi.yaml → CreateOrderRequest). No prices: the
+ * server quotes them. GSTIN format and the GSTIN + legal-name pairing are
+ * checked in the controller so they answer with the contract's own codes.
+ */
 class CustomerDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(120)
   name: string;
 
   @IsEmail()
   email: string;
 
-  /** Matches the prototype's validation rule: exactly 10 digits. */
   @Matches(/^\d{10}$/, { message: 'phone must be exactly 10 digits' })
   phone: string;
 }
@@ -70,29 +43,13 @@ class AddressDto {
   @IsNotEmpty()
   state: string;
 
-  /** Matches the prototype's validation rule: exactly 6 digits. */
   @Matches(/^\d{6}$/, { message: 'pin must be exactly 6 digits' })
   pin: string;
 }
 
 export class CreateOrderDto {
-  @IsArray()
-  @ArrayMinSize(1)
-  @ValidateNested({ each: true })
-  @Type(() => CartItemDto)
-  items: CartItemDto[];
-
-  @IsInt()
-  @Min(0)
-  subtotal: number;
-
-  @IsInt()
-  @Min(0)
-  codFee: number;
-
-  @IsInt()
-  @Min(0)
-  total: number;
+  @IsIn(['gold', 'silver', 'black'])
+  finish: Finish;
 
   @IsIn(['online', 'cod'])
   paymentMethod: PaymentMethod;
@@ -105,22 +62,18 @@ export class CreateOrderDto {
   @Type(() => AddressDto)
   address: AddressDto;
 
-  /**
-   * Required when paymentMethod is 'online', absent for 'cod' — validated in
-   * OrdersService.create (conditional on another field isn't expressible
-   * cleanly with class-validator decorators alone). The signature is the
-   * actual proof; the other two are just so the backend knows which
-   * Razorpay order/payment to check it against.
-   */
   @IsOptional()
   @IsString()
-  razorpayOrderId?: string;
+  buyerGstin?: string;
 
   @IsOptional()
   @IsString()
-  razorpayPaymentId?: string;
+  @IsNotEmpty()
+  @MaxLength(160)
+  buyerLegalName?: string;
 
   @IsOptional()
   @IsString()
-  razorpaySignature?: string;
+  @MaxLength(32)
+  offerCode?: string;
 }

@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 // tsconfig doesn't have esModuleInterop on — a default import here compiles to
 // `razorpay_1.default`, which doesn't exist. Explicit require-syntax sidesteps that.
 import Razorpay = require('razorpay');
+import type { GatewayPayment, PaymentGateway } from '../orders/payment/payment-gateway';
 
 export type RazorpayOrder = { id: string; amount: number; currency: string };
 
@@ -18,7 +19,7 @@ export type RazorpayOrder = { id: string; amount: number; currency: string };
  * these env vars are blank, which they are until real keys exist.
  */
 @Injectable()
-export class RazorpayService {
+export class RazorpayService implements PaymentGateway {
   private readonly logger = new Logger(RazorpayService.name);
   private client: Razorpay | null = null;
   readonly keyId: string;
@@ -40,8 +41,20 @@ export class RazorpayService {
 
   /** `amount` is in paise, same unit as everywhere else in this codebase — Razorpay expects the same. */
   async createOrder(amount: number, receipt: string): Promise<RazorpayOrder> {
-    const order = await this.getClient().orders.create({ amount, currency: 'INR', receipt });
+    const order = await this.getClient().orders.create({ amount, currency: 'INR', receipt, payment_capture: true });
     return { id: order.id, amount: Number(order.amount), currency: order.currency };
+  }
+
+  /** The payment as Razorpay has it now — `status` says whether it's captured yet. */
+  async fetchPayment(paymentId: string): Promise<GatewayPayment> {
+    const p = await this.getClient().payments.fetch(paymentId);
+    return { id: p.id, orderId: String(p.order_id), amount: Number(p.amount), currency: p.currency, status: p.status };
+  }
+
+  /** Every payment attempt on one Razorpay order (payment_sweep: was it captured after all?). */
+  async fetchOrderPayments(razorpayOrderId: string): Promise<GatewayPayment[]> {
+    const { items } = await this.getClient().orders.fetchPayments(razorpayOrderId);
+    return items.map((p) => ({ id: p.id, orderId: String(p.order_id), amount: Number(p.amount), currency: p.currency, status: p.status }));
   }
 
   /**

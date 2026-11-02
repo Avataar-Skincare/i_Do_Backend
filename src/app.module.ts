@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { HealthController } from './health/health.controller';
 import { OrdersModule } from './orders/orders.module';
@@ -10,10 +11,14 @@ import { MailModule } from './mail/mail.module';
 import { ContactModule } from './contact/contact.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { ENTITIES } from './entities';
+import { CatalogModule } from './catalog/catalog.module';
+import { SettingsModule } from './settings/settings.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // In-process jobs (TD-10): payment_sweep; each job takes a pg advisory lock.
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -35,6 +40,8 @@ import { ENTITIES } from './entities';
         synchronize: config.get<string>('DB_SYNC', 'false') === 'true',
       }),
     }),
+    SettingsModule,
+    CatalogModule,
     OrdersModule,
     ConsultsModule,
     UsersModule,

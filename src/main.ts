@@ -6,7 +6,8 @@ import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // rawBody: the Razorpay webhook HMAC is over the exact bytes received (req.rawBody).
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
   const config = app.get(ConfigService);
 
   // Behind the nginx container: trust exactly one hop so req.ip is the real client address
