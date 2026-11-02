@@ -34,6 +34,7 @@
     "@nestjs/jwt": "^12.0.2",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.0.0",
+    "@nestjs/schedule": "^5.0.1",
     "@nestjs/typeorm": "^12.0.1",
     "@types/cookie-parser": "^1.4.10",
     "bcrypt": "^6.0.0",

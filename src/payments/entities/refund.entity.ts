@@ -35,8 +35,9 @@ export class Refund {
   @Column({ type: 'int' })
   amount: number;
 
-  @Column({ type: 'varchar', length: 8 })
-  method: RefundMethod;
+  /** NULL until a COD customer gives UPI/bank details for a refused-ring refund (M21). */
+  @Column({ type: 'varchar', length: 8, nullable: true })
+  method: RefundMethod | null;
 
   /** AES-256-GCM ciphertext (key version in its prefix, TD-17); NULL for Razorpay refunds. */
   @Column({ type: 'bytea', name: 'dest_enc', nullable: true })

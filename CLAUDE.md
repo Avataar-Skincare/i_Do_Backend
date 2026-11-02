@@ -31,6 +31,19 @@ npm run migration:run
 npm run migration:revert
 ```
 
+## Tests
+
+- `npm test` runs everything; specs live next to the code as `*.spec.ts`.
+- `*.int.spec.ts` need a real Postgres: set `TEST_DATABASE_URL` to an **empty, local** database
+  (e.g. `postgres://postgres:pw@127.0.0.1:55432/ido_unit_test`). Without it they are skipped; a
+  non-local host is refused, so they can never touch a shared DB. They run the migrations and
+  truncate tables. Never put a spec file inside `src/migrations/` — every `.ts` there is loaded
+  as a migration.
+- `src/orders/state/` holds the order state machine (LLD §3.1): `order-transitions.ts` = the rules
+  (pure, exhaustively tested), `order-state.service.ts` = the only code that changes
+  `orders.status` (guarded UPDATE + `order_events` in one transaction; pass `manager` to add side
+  effects atomically).
+
 ## Architecture
 
 `src/main.ts` — global `ValidationPipe({ whitelist, forbidNonWhitelisted, transform })`, so every

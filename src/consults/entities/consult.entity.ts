@@ -70,6 +70,10 @@ export class Consult {
   @Column({ type: 'timestamptz', name: 'completed_at', nullable: true })
   completedAt: Date | null;
 
+  /** Partner's completion / no-show note (PATCH /consults/partner/:id/complete, M21). */
+  @Column({ type: 'text', nullable: true })
+  note: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
 }
